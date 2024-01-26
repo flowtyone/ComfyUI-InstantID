@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 import folder_paths
 
-#from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download
 from insightface.app import FaceAnalysis
 from .pipeline_stable_diffusion_xl_instantid import StableDiffusionXLInstantIDPipeline, draw_kps
 
@@ -67,8 +67,34 @@ class InsightFaceLoader_Node_Zho:
     CATEGORY = "📷InstantID"
 
     def load_insight_face_antelopev2(self, provider):
-            
-        model = FaceAnalysis(name="antelopev2", root=current_directory, providers=[provider + 'ExecutionProvider',])
+        files = [
+            "1k3d68.onnx",
+            "2d106det.onnx",
+            "genderage.onnx",
+            "glintr100.onnx",
+            "scrfd_10g_bnkps.onnx"
+        ]
+
+        insightface_dir = os.path.join(folder_paths.models_dir, "insightface")
+        insightface_models_dir = os.path.join(insightface_dir, "models")
+        antelope_dir = os.path.join(insightface_models_dir, 'antelopev2')
+
+        if not os.path.isdir(antelope_dir):
+            os.makedirs(antelope_dir, exist_ok=True)
+
+        for filename in files:
+            file_dest = os.path.join(antelope_dir, filename)
+
+            if not os.path.exists(file_dest):
+                path = hf_hub_download(
+                    filename=filename,
+                    repo_id="DIAMONIK7777/antelopev2",
+                    repo_type="model"
+                )
+
+                os.symlink(path, file_dest)
+
+        model = FaceAnalysis(name="antelopev2", root=insightface_dir, providers=[provider + 'ExecutionProvider',])
         model.prepare(ctx_id=0, det_size=(640, 640))
 
         return (model,)
@@ -94,15 +120,24 @@ class IDControlNetLoaderNode_Zho:
     def load_idcontrolnet(self, controlnet_path):
         full_path = folder_paths.get_full_path("checkpoints", controlnet_path)
 
-        dirname = os.path.dirname(full_path)
-        symlink_dest = os.path.join(dirname, "config.json")
+        symlink_dest = os.path.join(os.path.dirname(full_path), "symlinked_controlnet")
 
-        if not os.path.exists(symlink_dest):
-            os.symlink(os.path.join(os.path.dirname(__file__), "config.json"), symlink_dest)
+        if not os.path.isdir(symlink_dest):
+            os.makedirs(symlink_dest, exist_ok=True)
+
+        ckpt_dest_path = os.path.join(symlink_dest, os.path.basename(full_path))
+
+        if not os.path.exists(ckpt_dest_path):
+            os.symlink(full_path, ckpt_dest_path)
+
+        conf_dest_path = os.path.join(symlink_dest, "config.json")
+
+        if not os.path.exists(conf_dest_path):
+            os.symlink(os.path.join(os.path.dirname(__file__), "config.json"), conf_dest_path)
 
         controlnet = ControlNetModel.from_pretrained(
-            full_path,
-            torch_dtype=torch.float16,
+            symlink_dest,
+            torch_dtype=torch.float16
         )
 
         return [controlnet]
@@ -197,7 +232,7 @@ class Ipadapter_instantidLoader_Node_Zho:
     FUNCTION = "load_ip_adapter_instantid"
     CATEGORY = "📷InstantID"
 
-    def load_ip_adapter_instantid(self, pipe, Ipadapter_instantid_path, filename):
+    def load_ip_adapter_instantid(self, pipe, Ipadapter_instantid_path, filename=""):
         # 使用hf_hub_download方法获取PhotoMaker文件的路径
         face_adapter = folder_paths.get_full_path("checkpoints", Ipadapter_instantid_path)#os.path.join(Ipadapter_instantid_path, filename)
 
@@ -268,7 +303,7 @@ class IDGenerationNode_Zho:
         # prepare face emb
         face_info = insightface.get(cv2.cvtColor(np.array(face_image), cv2.COLOR_RGB2BGR))
         if not face_info:
-            return "No face detected"
+            raise Exception(f"No face detected")
 
         face_info = sorted(face_info, key=lambda x: (x['bbox'][2] - x['bbox'][0]) * (x['bbox'][3] - x['bbox'][1]))[-1]
         face_emb = face_info['embedding']
@@ -279,7 +314,7 @@ class IDGenerationNode_Zho:
             pose_image = resize_img(pose_image_optional)
             face_info = insightface.get(cv2.cvtColor(np.array(pose_image), cv2.COLOR_RGB2BGR))
             if len(face_info) == 0:
-                raise gr.Error(f"Cannot find any face in the reference image! Please upload another person image")
+                raise Exception(f"Cannot find any face in the reference image! Please upload another person image")
         
             face_info = face_info[-1]
             face_kps = draw_kps(pose_image, face_info['kps'])
